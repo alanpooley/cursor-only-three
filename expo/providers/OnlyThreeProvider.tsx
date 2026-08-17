@@ -170,7 +170,14 @@ export const [OnlyThreeProvider, useOnlyThree] = createContextHook(() => {
       reminderMinute: settings.reminderMinute,
       theme: settings.theme,
     });
-  }, [dayPlans, hydrated, memoryCompletions, memoryTasks, retroCompletions, saveStateMutation, settings, tomorrowTaskOrigins]);
+    // NOTE: saveStateMutation is intentionally omitted from the dependency
+    // array. useMutation() returns a new result object on every pending/
+    // success/error transition, so including it here — while this effect
+    // itself calls .mutate() — created an infinite save loop: mutate →
+    // status transition → new mutation object → effect re-fires → mutate
+    // again, forever. Depend only on the data that should trigger a save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dayPlans, hydrated, memoryCompletions, memoryTasks, retroCompletions, settings, todayTaskOrigins, tomorrowTaskOrigins]);
 
   const currentPalette = useMemo<ThemePalette>(() => {
     return themes[settings.theme] ?? themes.night;
@@ -197,8 +204,29 @@ export const [OnlyThreeProvider, useOnlyThree] = createContextHook(() => {
   }, [todayKey, tomorrowKey]);
 
   const updateTaskTitle = useCallback((type: TaskSize, title: string, dateKey?: string) => {
-    updatePlanTasks(dateKey ?? todayKey, (tasks) => tasks.map((task) => task.type === type ? { ...task, title } : task));
-  }, [updatePlanTasks, todayKey]);
+    const effectiveDateKey = dateKey ?? todayKey;
+    updatePlanTasks(effectiveDateKey, (tasks) => tasks.map((task) => task.type === type ? { ...task, title } : task));
+
+    // A direct manual edit invalidates any "pushed from memory/uncompleted"
+    // provenance tag on this slot — otherwise the origin badge keeps
+    // pointing at content that's no longer there. Clear it here rather than
+    // only when the slot goes empty.
+    if (effectiveDateKey === tomorrowKey) {
+      setTomorrowTaskOrigins((prev) => {
+        if (!prev[type]) return prev;
+        const next = { ...prev };
+        delete next[type];
+        return next;
+      });
+    } else if (effectiveDateKey === todayKey) {
+      setTodayTaskOrigins((prev) => {
+        if (!prev[type]) return prev;
+        const next = { ...prev };
+        delete next[type];
+        return next;
+      });
+    }
+  }, [updatePlanTasks, todayKey, tomorrowKey]);
 
   const addTaskToTomorrow = useCallback((title: string, origin?: TaskOrigin): boolean => {
     const plan = dayPlans.find((p) => p.date === tomorrowKey);
